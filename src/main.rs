@@ -8,7 +8,7 @@ use std::time::Duration;
 use actix_web::{get, web, App, HttpResponse, HttpServer, Responder, HttpRequest, ResponseError, post};
 use actix_web::error::HttpError;
 use actix_web::web::{Data, Json};
-use sea_orm::{ActiveModelTrait, ColumnTrait, ConnectOptions, Database, DatabaseBackend, DatabaseConnection, DbErr, EntityTrait, Iden, NotSet, QueryFilter, Statement};
+use sea_orm::{ActiveModelTrait, ColumnTrait, ConnectOptions, Database, DatabaseBackend, DatabaseConnection, DbErr, EntityTrait, Iden, NotSet, PaginatorTrait, QueryFilter, Statement};
 use sea_orm::ActiveValue::Set;
 use serde::Deserialize;
 use crate::entity::pessoa::{ActiveModel, Model};
@@ -58,6 +58,13 @@ WHERE apelido LIKE $1
         .collect();
 
     Ok(Json(x))
+}
+
+#[get("/contagem-pessoas")]
+async fn contagem(db: Data<AppState>) -> Result<impl Responder, HttpError> {
+    let count = PessoaEntity::find().count(&db.conn.to_owned()).await.unwrap();
+
+    Ok(Json(count))
 }
 
 #[post("/")]
@@ -125,6 +132,7 @@ async fn main() -> std::io::Result<()> {
                 .service(get_by_id)
                 .service(create)
                 .service(get_by_terms))
+                .service(contagem)
     }).workers(10).bind(("127.0.0.1", 8080))?;
 
     server.run().await?;
