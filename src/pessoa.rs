@@ -18,7 +18,7 @@ impl From<Model> for Pessoa {
             apelido: Some(model.apelido),
             nome: Some(model.nome),
             nascimento: model.nascimento.into(),
-            stack: Some(model.stack.unwrap().split_ascii_whitespace().map(String::from).collect()),
+            stack: Some(model.stack.unwrap_or_default().split_ascii_whitespace().map(String::from).collect()),
         }
     }
 }

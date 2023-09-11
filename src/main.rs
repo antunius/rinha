@@ -4,10 +4,11 @@ pub(crate) mod entity;
 use std::any::Any;
 use std::env;
 use std::fmt::Display;
+use std::ops::Deref;
 use std::time::Duration;
 use actix_web::{get, web, App, HttpResponse, HttpServer, Responder, HttpRequest, ResponseError, post};
 use actix_web::error::HttpError;
-use actix_web::web::{Data, Json};
+use actix_web::web::{Data, head, Json};
 use sea_orm::{ActiveModelTrait, ColumnTrait, ConnectOptions, Database, DatabaseBackend, DatabaseConnection, DbErr, EntityTrait, Iden, NotSet, PaginatorTrait, QueryFilter, Statement};
 use sea_orm::ActiveValue::Set;
 use serde::Deserialize;
@@ -15,6 +16,8 @@ use crate::entity::pessoa::{ActiveModel, Model};
 use crate::pessoa::Pessoa;
 use crate::entity::pessoa::Entity as PessoaEntity;
 use std::string::String;
+use std::sync::Arc;
+use actix_web::dev::ResourcePath;
 use uuid::Uuid;
 
 #[derive(Deserialize)]
@@ -23,23 +26,25 @@ struct QueryTerm {
 }
 
 #[get("/{user_id}")]
-async fn get_by_id(path: web::Path<(String)>, db: web::Data<AppState>) -> impl Responder {
-    let id = Uuid::try_parse(path.into_inner().as_str()).expect("");
-    let pessoa = get_pessoa(&db, id).await;
+async fn get_by_id(path: web::Path<(String)>, db: Data<AppState>) -> impl Responder {
+    let id = match Uuid::try_parse(path.into_inner().as_str()) {
+        Ok(uuid) => { uuid }
+        Err(_) => { return HttpResponse::BadRequest().finish(); }
+    };
+    let pessoa = get_pessoa(db, id).await;
     match pessoa {
         None => { HttpResponse::NotFound().finish() }
         Some(p) => { HttpResponse::Ok().json(<Model as Into<Pessoa>>::into(p)) }
     }
 }
 
-async fn get_pessoa(db: &Data<AppState>, id: Uuid) -> Option<Model> {
+async fn get_pessoa(db: Data<AppState>, id: Uuid) -> Option<Model> {
     let pessoa = PessoaEntity::find_by_id(id)
-        .one(&db.conn.to_owned()).await
-        .expect("");
+        .one(db.conn.as_ref().as_ref()).await.unwrap();
     pessoa
 }
 
-#[get("/")]
+#[get("")]
 async fn get_by_terms(t: web::Query<(QueryTerm)>, db: Data<AppState>) -> Result<impl Responder, HttpError> {
     let mut term = format!("%{}%", t.t);
     let pessoa = PessoaEntity::find()
@@ -48,9 +53,9 @@ async fn get_by_terms(t: web::Query<(QueryTerm)>, db: Data<AppState>) -> Result<
 WHERE apelido LIKE $1
    or nome LIKE $1
    or stack like $1"#, [term.into()]))
-        .all(&db.conn.to_owned())
+        .all(db.conn.as_ref().as_ref())
         .await
-        .expect("Error to Get");
+        .unwrap();
 
     let x: Vec<Pessoa> = pessoa
         .iter()
@@ -62,22 +67,22 @@ WHERE apelido LIKE $1
 
 #[get("/contagem-pessoas")]
 async fn contagem(db: Data<AppState>) -> Result<impl Responder, HttpError> {
-    let count = PessoaEntity::find().count(&db.conn.to_owned()).await.unwrap();
+    let count = PessoaEntity::find().count(db.conn.as_ref().as_ref()).await.unwrap();
 
     Ok(Json(count))
 }
 
-#[post("/")]
+#[post("")]
 async fn create(pessoa: Json<Pessoa>, data: Data<AppState>) -> impl Responder {
     match validate(pessoa.0) {
         Ok(p) => {
             let x = save_pessoa(&data, p).await;
             match x {
-                Ok(_entity) => { HttpResponse::Created() }
-                Err(_error) => { HttpResponse::UnprocessableEntity() }
+                Ok(_entity) => { HttpResponse::Created().insert_header(("LOCATION", format!("/pessoas/{}", _entity.id.unwrap().to_string()))).finish() }
+                Err(_error) => { HttpResponse::UnprocessableEntity().finish() }
             }
         }
-        Err(_) => { HttpResponse::UnprocessableEntity() }
+        Err(_) => { HttpResponse::UnprocessableEntity().finish() }
     }
 }
 
@@ -88,7 +93,7 @@ async fn save_pessoa(data: &Data<AppState>, p: Pessoa) -> Result<ActiveModel, Db
         nome: Set(p.nome.clone().unwrap()),
         nascimento: Set(p.nascimento.to_owned()),
         stack: Set(get_stack(p)),
-    }.save(&data.conn.to_owned()).await;
+    }.save(data.conn.as_ref().as_ref()).await;
     x
 }
 
@@ -113,27 +118,32 @@ async fn not_found(request: HttpRequest) -> impl Responder {
 async fn main() -> std::io::Result<()> {
     dotenvy::dotenv().ok();
     env_logger::init();
-    let db = env::var("DATABASE_URL").expect("HOST is not set in .env file");
+    let db = env::var("DATABASE_URL").expect("DATABASE_URL is not set in .env file");
+    let host = env::var("HOST").expect("HOST is not set in .env file");
+    let port = env::var("PORT").expect("PORT is not set in .env file");
+    let max_conn = env::var("MAX_CONN").expect("MAX_CONN is not set in .env file");
 
     let mut opt = ConnectOptions::new(&db);
-    opt.max_connections(100)
+    opt.max_connections(max_conn.parse().unwrap())
         .min_connections(5)
         .connect_timeout(Duration::from_secs(8))
         .acquire_timeout(Duration::from_secs(8))
         .idle_timeout(Duration::from_secs(8))
-        .max_lifetime(Duration::from_secs(8))
+        .max_lifetime(Duration::from_secs(60))
         .set_schema_search_path("public"); // Setting default PostgreSQL schema
 
-    let db = Database::connect(opt).await.expect("Error to connect database");
+
+    let conn = Box::new(Database::connect(opt).await.unwrap());
+    let db = Arc::new(conn);
     let server = HttpServer::new(move || {
-        App::new().app_data(web::Data::new(AppState { conn: db.clone() }))
+        App::new().app_data(Data::new(AppState { conn: db.clone() }))
             .default_service(web::to(|| HttpResponse::NotFound()))
             .service(web::scope("/pessoas")
                 .service(get_by_id)
                 .service(create)
                 .service(get_by_terms))
-                .service(contagem)
-    }).workers(10).bind(("127.0.0.1", 8080))?;
+            .service(contagem)
+    }).bind((format!("{}:{}", host, port).path()))?;
 
     server.run().await?;
     Ok(())
@@ -141,6 +151,6 @@ async fn main() -> std::io::Result<()> {
 
 #[derive(Debug, Clone)]
 struct AppState {
-    pub(crate) conn: DatabaseConnection,
+    pub(crate) conn: Arc<Box<DatabaseConnection>>,
 }
 
