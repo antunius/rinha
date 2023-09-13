@@ -14,6 +14,8 @@ pub struct Model {
     pub nascimento: Date,
     #[sea_orm(column_type = "Text", nullable)]
     pub stack: Option<String>,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub search: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

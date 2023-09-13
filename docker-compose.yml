@@ -2,18 +2,16 @@ version: '3.6'
 services:
   api1: # API - Instância 01
     container_name: api1
-    image: marcusantunius/rinha:1.0
+    image: marcusantunius/rinha:1.0.3
     hostname: api1
     environment:
-      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/rinha"
+      DATABASE_URL: "postgresql://postgres:postgres@db:5432/rinha"
       HOST: 0.0.0.0
       PORT: 81
-      MAX_CONN: 20
     depends_on:
       - db
     expose:
       - "81"
-    network_mode: host
     deploy:
       resources:
         limits:
@@ -22,18 +20,16 @@ services:
 
   api2: # API - Instância 02
     container_name: api2
-    image: marcusantunius/rinha:1.0
+    image: marcusantunius/rinha:1.0.3
     hostname: api2
     environment:
-      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/rinha"
+      DATABASE_URL: "postgresql://postgres:postgres@db:5432/rinha"
       HOST: 0.0.0.0
       PORT: 82
-      MAX_CONN: 50
     depends_on:
       - db
     expose:
       - "82"
-    network_mode: host
     deploy:
       resources:
         limits:
@@ -49,12 +45,11 @@ services:
       - api2
     ports:
       - "9999:9999"
-    network_mode: host
     deploy:
       resources:
         limits:
           cpus: '0.25'
-          memory: '150MB'
+          memory: '0.5GB'
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -67,10 +62,9 @@ services:
       POSTGRES_DB: rinha
     ports:
       - '5432:5432'
-    command: postgres -c 'max_connections=10000' -c 'logging_collector=off' -c 'fsync=off' -c 'listen_addresses=*' -c 'work_mem=100MB' -c 'log_statement=none'
+    command: postgres -c 'max_connections=10000' -c 'logging_collector=off' -c 'shared_buffers=500MB' -c 'fsync=off' -c 'listen_addresses=*' -c 'work_mem=100MB' -c 'log_statement=none'
     volumes:
       - ./postgres/:/docker-entrypoint-initdb.d/
-    network_mode: host
     deploy:
       resources:
         limits:

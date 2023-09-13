@@ -4,19 +4,18 @@ pub(crate) mod entity;
 use std::any::Any;
 use std::env;
 use std::fmt::Display;
-use std::ops::Deref;
-use std::time::Duration;
+use std::ops::{Add, Deref};
 use actix_web::{get, web, App, HttpResponse, HttpServer, Responder, HttpRequest, ResponseError, post};
 use actix_web::error::HttpError;
-use actix_web::web::{Data, head, Json};
-use sea_orm::{ActiveModelTrait, ColumnTrait, ConnectOptions, Database, DatabaseBackend, DatabaseConnection, DbErr, EntityTrait, Iden, NotSet, PaginatorTrait, QueryFilter, Statement};
+use actix_web::web::{Data, Json};
+use sea_orm::{ActiveModelTrait, ColumnTrait, ConnectOptions, Database, DatabaseBackend, DatabaseConnection, DbErr, EntityTrait, Iden, NotSet, PaginatorTrait, QueryFilter, Statement, Unset};
 use sea_orm::ActiveValue::Set;
 use serde::Deserialize;
 use crate::entity::pessoa::{ActiveModel, Model};
 use crate::pessoa::Pessoa;
 use crate::entity::pessoa::Entity as PessoaEntity;
 use std::string::String;
-use std::sync::Arc;
+use std::time::Duration;
 use actix_web::dev::ResourcePath;
 use uuid::Uuid;
 
@@ -40,7 +39,7 @@ async fn get_by_id(path: web::Path<(String)>, db: Data<AppState>) -> impl Respon
 
 async fn get_pessoa(db: Data<AppState>, id: Uuid) -> Option<Model> {
     let pessoa = PessoaEntity::find_by_id(id)
-        .one(db.conn.as_ref().as_ref()).await.unwrap();
+        .one(&db.conn).await.unwrap();
     pessoa
 }
 
@@ -50,10 +49,8 @@ async fn get_by_terms(t: web::Query<(QueryTerm)>, db: Data<AppState>) -> Result<
     let pessoa = PessoaEntity::find()
         .from_raw_sql(Statement::from_sql_and_values(
             DatabaseBackend::Postgres, r#"SELECT * FROM pessoa
-WHERE apelido LIKE $1
-   or nome LIKE $1
-   or stack like $1"#, [term.into()]))
-        .all(db.conn.as_ref().as_ref())
+WHERE search LIKE $1 limit 50"#, [term.into()]))
+        .all(&db.conn)
         .await
         .unwrap();
 
@@ -67,7 +64,8 @@ WHERE apelido LIKE $1
 
 #[get("/contagem-pessoas")]
 async fn contagem(db: Data<AppState>) -> Result<impl Responder, HttpError> {
-    let count = PessoaEntity::find().count(db.conn.as_ref().as_ref()).await.unwrap();
+    let count = PessoaEntity::find()
+        .count(&db.conn).await.unwrap();
 
     Ok(Json(count))
 }
@@ -92,8 +90,9 @@ async fn save_pessoa(data: &Data<AppState>, p: Pessoa) -> Result<ActiveModel, Db
         apelido: Set(p.apelido.to_owned().unwrap()),
         nome: Set(p.nome.clone().unwrap()),
         nascimento: Set(p.nascimento.to_owned()),
-        stack: Set(get_stack(p)),
-    }.save(data.conn.as_ref().as_ref()).await;
+        stack: Set( get_stack(p)),
+        search: NotSet,
+    }.save(&data.conn).await;
     x
 }
 
@@ -122,19 +121,25 @@ async fn main() -> std::io::Result<()> {
     let host = env::var("HOST").expect("HOST is not set in .env file");
     let port = env::var("PORT").expect("PORT is not set in .env file");
     let max_conn = env::var("MAX_CONN").expect("MAX_CONN is not set in .env file");
+    let conn_timeout = env::var("TIMEOUT_CONN").expect("MAX_CONN is not set in .env file");
+    let conn_timeout_acquire = env::var("ACQUIRE_CONN").expect("MAX_CONN is not set in .env file");
+    let conn_timeout_idle = env::var("IDLE_CONN").expect("MAX_CONN is not set in .env file");
+    let conn_max_lifetime = env::var("LIFETIME_CONN").expect("MAX_CONN is not set in .env file");
 
-    let mut opt = ConnectOptions::new(&db);
-    opt.max_connections(max_conn.parse().unwrap())
-        .min_connections(5)
-        .connect_timeout(Duration::from_secs(8))
-        .acquire_timeout(Duration::from_secs(8))
-        .idle_timeout(Duration::from_secs(8))
-        .max_lifetime(Duration::from_secs(60))
-        .set_schema_search_path("public"); // Setting default PostgreSQL schema
+    /*
+        let mut opt = ConnectOptions::new(&db);
+        opt.max_connections(max_conn.parse().unwrap())
+            .min_connections(max_conn.parse().unwrap())
+            .connect_timeout(Duration::from_secs(conn_timeout.parse().unwrap()))
+            .acquire_timeout(Duration::from_secs(conn_timeout_acquire.parse().unwrap()))
+            .idle_timeout(Duration::from_secs(conn_timeout_idle.parse().unwrap()))
+            .max_lifetime(Duration::from_secs(conn_max_lifetime.parse().unwrap()))
+            .set_schema_search_path("public"); // Setting default PostgreSQL schema
 
 
-    let conn = Box::new(Database::connect(opt).await.unwrap());
-    let db = Arc::new(conn);
+
+     */
+    let db = Database::connect(db).await.expect("Error to connect db");
     let server = HttpServer::new(move || {
         App::new().app_data(Data::new(AppState { conn: db.clone() }))
             .default_service(web::to(|| HttpResponse::NotFound()))
@@ -151,6 +156,6 @@ async fn main() -> std::io::Result<()> {
 
 #[derive(Debug, Clone)]
 struct AppState {
-    pub(crate) conn: Arc<Box<DatabaseConnection>>,
+    pub(crate) conn: DatabaseConnection,
 }
 
