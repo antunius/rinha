@@ -1,22 +1,24 @@
-CREATE TABLE IF NOT EXISTS pessoa
+CREATE extension pg_trgm;
+
+
+CREATE TEXT SEARCH CONFIGURATION BUSCA (COPY = portuguese);
+ALTER TEXT SEARCH CONFIGURATION BUSCA ALTER MAPPING FOR hword, hword_part, word WITH portuguese_stem;
+-- https://www.postgresql.org/docs/current/non-durability.html
+create UNLOGGED table Pessoa
 (
-    id         uuid PRIMARY KEY DEFAULT (gen_random_uuid()),
-    apelido    varchar(32) UNIQUE NOT NULL,
-    nome       varchar(100)       NOT NULL,
-    nascimento date               NOT NULL,
-    stack      text,
-    search     TEXT GENERATED ALWAYS AS (
-                   LOWER(nome || apelido || coalesce(stack, ''))
-                   ) STORED
+    apelido    varchar(32)  not null UNIQUE,
+    nascimento date         not null,
+    nome       varchar(100) not null,
+    publicID   uuid         not null,
+    stack      VARCHAR(800),
+    primary key (publicID),
+    BUSCA_TRGM TEXT GENERATED ALWAYS AS (
+                   NOME || ' ' || APELIDO || ' ' || COALESCE(STACK, '')
+                   ) STORED not null
 );
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
-update pg_opclass
-set opcdefault = true
-where opcname = 'gin_trgm_ops';
+CREATE INDEX CONCURRENTLY IF NOT EXISTS IDX_PESSOAS_BUSCA_TGRM ON PESSOA USING GIST (BUSCA_TRGM GIST_TRGM_OPS( siglen= 256))
+    INCLUDE (apelido, nascimento, nome, publicID, stack);
 
-CREATE INDEX tbl_col_gin_trgm_idx ON pessoa USING gin (search gin_trgm_ops);
-
-CREATE INDEX pessoa_id_index
-    ON pessoa USING hash (id);
-
+ALTER TABLE Pessoa
+    SET (autovacuum_enabled = false);

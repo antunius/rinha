@@ -15,7 +15,6 @@ use crate::entity::pessoa::{ActiveModel, Model};
 use crate::pessoa::Pessoa;
 use crate::entity::pessoa::Entity as PessoaEntity;
 use std::string::String;
-use std::time::Duration;
 use actix_web::dev::ResourcePath;
 use uuid::Uuid;
 
@@ -49,7 +48,7 @@ async fn get_by_terms(t: web::Query<(QueryTerm)>, db: Data<AppState>) -> Result<
     let pessoa = PessoaEntity::find()
         .from_raw_sql(Statement::from_sql_and_values(
             DatabaseBackend::Postgres, r#"SELECT * FROM pessoa
-WHERE search LIKE $1 limit 50"#, [term.into()]))
+WHERE busca_trgm LIKE $1 limit 50"#, [term.into()]))
         .all(&db.conn)
         .await
         .unwrap();
@@ -76,23 +75,23 @@ async fn create(pessoa: Json<Pessoa>, data: Data<AppState>) -> impl Responder {
         Ok(p) => {
             let x = save_pessoa(&data, p).await;
             match x {
-                Ok(_entity) => { HttpResponse::Created().insert_header(("LOCATION", format!("/pessoas/{}", _entity.id.unwrap().to_string()))).finish() }
-                Err(_error) => { HttpResponse::UnprocessableEntity().finish() }
+                Ok(_entity) => { HttpResponse::Created().insert_header(("LOCATION", format!("/pessoas/{}", _entity.publicid.to_string()))).finish() }
+                Err(_error) => { HttpResponse::UnprocessableEntity().body(_error.to_string()) }
             }
         }
         Err(_) => { HttpResponse::UnprocessableEntity().finish() }
     }
 }
 
-async fn save_pessoa(data: &Data<AppState>, p: Pessoa) -> Result<ActiveModel, DbErr> {
+async fn save_pessoa(data: &Data<AppState>, p: Pessoa) -> Result<Model, DbErr> {
     let x = ActiveModel {
-        id: NotSet,
+        publicid: Set(Uuid::new_v5(&Uuid::NAMESPACE_OID, p.apelido.clone().unwrap().as_ref()).to_string().parse().unwrap()),
         apelido: Set(p.apelido.to_owned().unwrap()),
         nome: Set(p.nome.clone().unwrap()),
         nascimento: Set(p.nascimento.to_owned()),
-        stack: Set( get_stack(p)),
-        search: NotSet,
-    }.save(&data.conn).await;
+        stack: Set(get_stack(p)),
+        busca_trgm: NotSet,
+    }.insert(&data.conn).await;
     x
 }
 
@@ -116,29 +115,35 @@ async fn not_found(request: HttpRequest) -> impl Responder {
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     dotenvy::dotenv().ok();
+    /*
     env_logger::init();
+
+    // a builder for `FmtSubscriber`.
+    let subscriber = FmtSubscriber::builder()
+        // all spans/events with a level higher than TRACE (e.g, debug, info, warn, etc.)
+        // will be written to stdout.
+        .with_max_level(Level::TRACE)
+        // completes the builder.
+        .finish();
+
+    tracing::subscriber::set_global_default(subscriber)
+        .expect("setting default subscriber failed");
+
+
+     */
     let db = env::var("DATABASE_URL").expect("DATABASE_URL is not set in .env file");
     let host = env::var("HOST").expect("HOST is not set in .env file");
     let port = env::var("PORT").expect("PORT is not set in .env file");
     let max_conn = env::var("MAX_CONN").expect("MAX_CONN is not set in .env file");
-    let conn_timeout = env::var("TIMEOUT_CONN").expect("MAX_CONN is not set in .env file");
-    let conn_timeout_acquire = env::var("ACQUIRE_CONN").expect("MAX_CONN is not set in .env file");
-    let conn_timeout_idle = env::var("IDLE_CONN").expect("MAX_CONN is not set in .env file");
-    let conn_max_lifetime = env::var("LIFETIME_CONN").expect("MAX_CONN is not set in .env file");
 
-    /*
-        let mut opt = ConnectOptions::new(&db);
-        opt.max_connections(max_conn.parse().unwrap())
-            .min_connections(max_conn.parse().unwrap())
-            .connect_timeout(Duration::from_secs(conn_timeout.parse().unwrap()))
-            .acquire_timeout(Duration::from_secs(conn_timeout_acquire.parse().unwrap()))
-            .idle_timeout(Duration::from_secs(conn_timeout_idle.parse().unwrap()))
-            .max_lifetime(Duration::from_secs(conn_max_lifetime.parse().unwrap()))
-            .set_schema_search_path("public"); // Setting default PostgreSQL schema
 
+    /*let mut opt = ConnectOptions::new(&db);
+    opt.max_connections(max_conn.parse().unwrap())
+        .min_connections(max_conn.parse().unwrap()).sqlx_logging_level(log::LevelFilter::Info);
 
 
      */
+
     let db = Database::connect(db).await.expect("Error to connect db");
     let server = HttpServer::new(move || {
         App::new().app_data(Data::new(AppState { conn: db.clone() }))

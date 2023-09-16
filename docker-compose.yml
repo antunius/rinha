@@ -2,12 +2,14 @@ version: '3.6'
 services:
   api1: # API - Instância 01
     container_name: api1
-    image: marcusantunius/rinha:1.0.3
+    #image: marcusantunius/rinha:1.0.4 com pool
+    image: marcusantunius/rinha:1.0.4-final
     hostname: api1
     environment:
       DATABASE_URL: "postgresql://postgres:postgres@db:5432/rinha"
       HOST: 0.0.0.0
       PORT: 81
+      MAX_CONN: 100
     depends_on:
       - db
     expose:
@@ -20,12 +22,14 @@ services:
 
   api2: # API - Instância 02
     container_name: api2
-    image: marcusantunius/rinha:1.0.3
+    #image: marcusantunius/rinha:1.0.4 com pool
+    image: marcusantunius/rinha:1.0.4-final
     hostname: api2
     environment:
       DATABASE_URL: "postgresql://postgres:postgres@db:5432/rinha"
       HOST: 0.0.0.0
       PORT: 82
+      MAX_CONN: 100
     depends_on:
       - db
     expose:
@@ -62,7 +66,7 @@ services:
       POSTGRES_DB: rinha
     ports:
       - '5432:5432'
-    command: postgres -c 'max_connections=10000' -c 'logging_collector=off' -c 'shared_buffers=500MB' -c 'fsync=off' -c 'listen_addresses=*' -c 'work_mem=100MB' -c 'log_statement=none'
+    command: postgres -c 'max_connections=200' -c 'shared_buffers=512MB' -c 'fsync=off' -c 'effective_cache_size=512MB' -c 'synchronous_commit=off' -c 'checkpoint_timeout=1d' -c 'max_wal_size=1GB' -c 'full_page_writes=false'
     volumes:
       - ./postgres/:/docker-entrypoint-initdb.d/
     deploy:
